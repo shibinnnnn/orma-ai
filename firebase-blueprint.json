@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "Customer": {
+      "title": "Customer",
+      "description": "A customer record for porting tracking",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique ID" },
+        "name": { "type": "string", "description": "Customer name" },
+        "number": { "type": "string", "description": "Mobile number" },
+        "location": { "type": "string", "description": "Customer location" },
+        "addedAt": { "type": "string", "format": "date-time", "description": "When the record was created" },
+        "portingDate": { "type": "string", "format": "date-time", "description": "Calculated porting eligibility date" },
+        "userId": { "type": "string", "description": "UID of the owner" }
+      },
+      "required": ["id", "name", "number", "addedAt", "portingDate", "userId"]
+    },
+    "FCMToken": {
+      "title": "FCM Token",
+      "description": "Stores FCM tokens for push notifications",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string", "description": "The FCM registration token" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["token", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Collection of customer records"
+    },
+    "/fcm_tokens/{userId}": {
+      "schema": "FCMToken",
+      "description": "Collection of user FCM tokens"
+    }
+  }
+}

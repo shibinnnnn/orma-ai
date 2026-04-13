@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Orma AI</string>
+    <string name="title_activity_main">Orma AI</string>
+    <string name="package_name">com.orma.ai</string>
+    <string name="custom_url_scheme">com.orma.ai</string>
+</resources>

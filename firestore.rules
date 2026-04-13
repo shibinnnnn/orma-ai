@@ -1,0 +1,72 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: customers
+    // Document ID: {customerId}
+    // Fields:
+    //   - id: string (required) - Unique ID
+    //   - name: string (required, 1-100 chars) - Customer name
+    //   - number: string (required, 10-15 chars) - Mobile number
+    //   - location: string (optional, 0-100 chars) - Customer location
+    //   - addedAt: string (required, ISO8601) - Creation date
+    //   - portingDate: string (required, ISO8601) - Eligibility date
+    //   - userId: string (required, matches auth.uid) - Owner UID
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidCustomer(data) {
+      return data.keys().hasAll(['id', 'name', 'number', 'addedAt', 'portingDate', 'userId']) &&
+             data.keys().hasOnly(['id', 'name', 'number', 'addedAt', 'portingDate', 'userId', 'location']) &&
+             data.id is string &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 100 &&
+             data.number is string && data.number.size() >= 10 && data.number.size() <= 15 &&
+             (!('location' in data) || (data.location is string && data.location.size() <= 100)) &&
+             isValidDateString(data.addedAt) &&
+             isValidDateString(data.portingDate) &&
+             data.userId == request.auth.uid;
+    }
+
+    match /customers/{customerId} {
+      allow read: if isOwner(resource.data.userId);
+      allow create: if isAuthenticated() && isValidCustomer(request.resource.data);
+      allow update: if isOwner(resource.data.userId) && 
+                      isValidCustomer(request.resource.data) &&
+                      request.resource.data.userId == resource.data.userId &&
+                      request.resource.data.id == resource.data.id;
+      allow delete: if isOwner(resource.data.userId);
+    }
+
+    match /fcm_tokens/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+  }
+}
