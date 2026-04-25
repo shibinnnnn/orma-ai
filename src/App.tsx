@@ -5,12 +5,10 @@
 
 import * as React from 'react';
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Search, MapPin, Phone, User, Calendar, Bell, Trash2, AlertCircle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon, LogIn, LogOut } from 'lucide-react';
+import { Plus, Search, MapPin, Phone, User, Calendar, Bell, Trash2, AlertCircle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTheme } from 'next-themes';
-import { useAuthState } from 'react-firebase-hooks/auth';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, orderBy, setDoc, getDoc } from 'firebase/firestore';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -18,8 +16,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { auth, db, signInWithGoogle, logout, requestNotificationPermission, getMessagingInstance } from './firebase';
-import { onMessage } from 'firebase/messaging';
 import {
   Dialog,
   DialogContent,
@@ -59,43 +55,6 @@ import { Separator } from '@/components/ui/separator';
 import { Customer, Settings } from './types';
 import { calculatePortingDate, getPortingStatus, formatDate } from './lib/date-utils';
 
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId?: string | null;
-    email?: string | null;
-    emailVerified?: boolean | null;
-    isAnonymous?: boolean | null;
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error details: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
-}
-
 type SortConfig = {
   key: 'name' | 'addedAt' | 'portingDate';
   direction: 'asc' | 'desc';
@@ -110,7 +69,6 @@ const DEFAULT_SETTINGS: Settings = {
 
 export default function App() {
   const { theme, setTheme } = useTheme();
-  const [user, loading] = useAuthState(auth);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [searchQuery, setSearchQuery] = useState('');
@@ -128,113 +86,70 @@ export default function App() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
 
-  // Handle Push Notifications
+  // Load and sync customers from localStorage
+  useEffect(() => {
+    const savedCustomers = localStorage.getItem('orma_customers');
+    if (savedCustomers) {
+      try {
+        setCustomers(JSON.parse(savedCustomers));
+      } catch (e) {
+        console.error('Failed to parse customers', e);
+      }
+    }
+  }, []);
+
+  const persistCustomers = (newCustomers: Customer[]) => {
+    setCustomers(newCustomers);
+    localStorage.setItem('orma_customers', JSON.stringify(newCustomers));
+  };
+
+  // Push notifications removed as they depend on FCM/Service workers linked to Firebase
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setPermissionStatus(Notification.permission);
     } else {
       setPermissionStatus('unsupported');
     }
-
-    if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/firebase-messaging-sw.js')
-        .then((registration) => {
-          console.log('Service Worker registered with scope:', registration.scope);
-        })
-        .catch((err) => {
-          console.error('Service Worker registration failed:', err);
-        });
-    }
-
-    if (user) {
-      const setupNotifications = async () => {
-        const msg = await getMessagingInstance();
-        if (!msg) return;
-
-        // We only auto-request if it's already granted
-        if (Notification.permission === 'granted') {
-          const token = await requestNotificationPermission();
-          if (token) {
-            await saveTokenToBackend(token, user.uid);
-          }
-        }
-
-        const unsubscribe = onMessage(msg, (payload) => {
-          toast.info(payload.notification?.title || 'Orma AI Alert', {
-            description: payload.notification?.body,
-            duration: 8000,
-          });
-        });
-
-        return unsubscribe;
-      };
-
-      let unsubscribe: (() => void) | undefined;
-      setupNotifications().then(unsub => {
-        unsubscribe = unsub;
-      });
-
-      return () => {
-        if (unsubscribe) unsubscribe();
-      };
-    }
-  }, [user]);
-
-  const saveTokenToBackend = async (token: string, userId: string) => {
-    try {
-      await fetch('/api/save-token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token, userId })
-      });
-    } catch (error) {
-      console.error('Failed to save notification token:', error);
-    }
-  };
+  }, []);
 
   const handleEnableNotifications = async () => {
-    if (!user) {
-      toast.error('Please login first');
+    if (!('Notification' in window)) {
+      toast.error('Notifications not supported by this browser');
       return;
     }
-    const token = await requestNotificationPermission();
-    if (token) {
-      await saveTokenToBackend(token, user.uid);
-      setPermissionStatus('granted');
-      toast.success('Push notifications enabled!');
+    
+    const permission = await Notification.requestPermission();
+    setPermissionStatus(permission);
+    
+    if (permission === 'granted') {
+      toast.success('Local notifications enabled!');
     } else {
-      setPermissionStatus(Notification.permission);
-      toast.error('Permission denied or failed to enable notifications');
+      toast.error('Permission denied for notifications');
     }
   };
 
   const handleTestNotification = async () => {
-    if (!user) return;
-    try {
-      const res = await fetch('/api/test-notification', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.uid })
+    if (Notification.permission === 'granted') {
+      new Notification('Orma AI', {
+        body: 'Local test notification successful!',
+        icon: '/favicon.ico'
       });
-      const data = await res.json();
-      if (data.success) {
-        toast.success('Test notification sent!');
-      } else {
-        toast.error(data.error || 'Failed to send test notification');
-      }
-    } catch (error) {
-      console.error('Test notification failed:', error);
-      toast.error('Failed to connect to server');
+      toast.success('Test notification sent locally!');
+    } else {
+      toast.error('Please enable notifications first');
     }
   };
 
   const handleTestEmail = async () => {
-    if (!user || !user.email) return;
+    if (!settings.userEmail) {
+      toast.error('Please set an email address in settings first');
+      return;
+    }
     try {
       const res = await fetch('/api/test-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.uid, email: user.email })
+        body: JSON.stringify({ email: settings.userEmail })
       });
       const data = await res.json();
       if (data.success) {
@@ -248,38 +163,9 @@ export default function App() {
     }
   };
 
-  // Sync with Firestore
+  // Load and sync settings from localStorage
   useEffect(() => {
-    if (!user) {
-      setCustomers([]);
-      return;
-    }
-
-    const q = query(
-      collection(db, 'customers'),
-      where('userId', '==', user.uid),
-      orderBy('addedAt', 'desc')
-    );
-
-    const customersPath = 'customers';
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const docs = snapshot.docs.map(doc => ({
-        ...doc.data(),
-        id: doc.id
-      })) as Customer[];
-      setCustomers(docs);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, customersPath);
-      toast.error("Failed to sync with cloud database");
-    });
-
-    return () => unsubscribe();
-  }, [user]);
-
-  // Load and sync settings
-  useEffect(() => {
-    // Load from localStorage first for immediate UI feedback
-    const savedSettings = localStorage.getItem('porting_pro_settings');
+    const savedSettings = localStorage.getItem('orma_settings');
     if (savedSettings) {
       try {
         setSettings(JSON.parse(savedSettings));
@@ -287,65 +173,11 @@ export default function App() {
         console.error('Failed to parse settings', e);
       }
     }
+  }, []);
 
-    if (!user) return;
-
-    // Load from Firestore for logged in users
-    const loadSettings = async () => {
-      const settingsPath = `settings/${user.uid}`;
-      try {
-        const settingsRef = doc(db, 'settings', user.uid);
-        const settingsSnap = await getDoc(settingsRef);
-        
-        if (settingsSnap.exists()) {
-          const cloudSettings = settingsSnap.data() as Settings;
-          setSettings(cloudSettings);
-          // Sync back to local storage
-          localStorage.setItem('porting_pro_settings', JSON.stringify(cloudSettings));
-        } else {
-          // New user, initialize cloud settings with defaults plus email
-          console.log("Initializing settings for new user...");
-          const initialSettings = { 
-            ...DEFAULT_SETTINGS, 
-            userEmail: user.email || undefined,
-            updatedAt: new Date().toISOString()
-          };
-          try {
-            await setDoc(settingsRef, initialSettings);
-            setSettings(initialSettings as Settings);
-          } catch (writeErr) {
-            handleFirestoreError(writeErr, OperationType.WRITE, settingsPath);
-          }
-        }
-      } catch (error) {
-        // Only handle if it hasn't been re-thrown by handleFirestoreError inside the else block
-        if (error instanceof Error && error.message.startsWith('{')) {
-          console.error("Cloud Settings Error:", error.message);
-          return;
-        }
-        handleFirestoreError(error, OperationType.GET, settingsPath);
-      }
-    };
-
-    loadSettings();
-  }, [user]);
-
-  // Persist settings locally and to cloud
-  const persistSettings = async (newSettings: Settings) => {
-    localStorage.setItem('porting_pro_settings', JSON.stringify(newSettings));
-    if (user) {
-      const settingsPath = `settings/${user.uid}`;
-      try {
-        const settingsRef = doc(db, 'settings', user.uid);
-        await setDoc(settingsRef, {
-          ...newSettings,
-          userEmail: user.email || newSettings.userEmail,
-          updatedAt: new Date().toISOString()
-        }, { merge: true });
-      } catch (error) {
-        handleFirestoreError(error, OperationType.WRITE, settingsPath);
-      }
-    }
+  const persistSettings = (newSettings: Settings) => {
+    setSettings(newSettings);
+    localStorage.setItem('orma_settings', JSON.stringify(newSettings));
   };
 
   // Check for notifications on load and periodic intervals
@@ -372,12 +204,8 @@ export default function App() {
     }
   }, [customers.length, settings]);
 
-  const handleAddCustomer = async (e: React.FormEvent) => {
+  const handleAddCustomer = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) {
-      toast.error('You must be logged in to add customers');
-      return;
-    }
     if (!newCustomer.name || !newCustomer.number) {
       toast.error('Please fill in all required fields');
       return;
@@ -386,53 +214,41 @@ export default function App() {
     const addedAt = new Date().toISOString();
     const portingDate = calculatePortingDate(addedAt);
 
-    const customersPath = 'customers';
-    try {
-      await addDoc(collection(db, customersPath), {
-        ...newCustomer,
-        addedAt,
-        portingDate,
-        userId: user.uid,
-        id: crypto.randomUUID(), // Keeping for local consistency if needed
-      });
+    const customer: Customer = {
+      ...newCustomer,
+      id: crypto.randomUUID(),
+      addedAt,
+      portingDate,
+    };
 
-      setNewCustomer({ name: '', number: '', location: '' });
-      setIsAddDialogOpen(false);
-      toast.success('Customer added to cloud');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, customersPath);
-    }
+    persistCustomers([customer, ...customers]);
+    setNewCustomer({ name: '', number: '', location: '' });
+    setIsAddDialogOpen(false);
+    toast.success('Customer added locally');
   };
 
-  const handleUpdateCustomer = async (e: React.FormEvent) => {
+  const handleUpdateCustomer = (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingCustomer || !editingCustomer.name || !editingCustomer.number) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    const customerPath = `customers/${editingCustomer.id}`;
-    try {
-      const customerRef = doc(db, 'customers', editingCustomer.id);
-      await updateDoc(customerRef, {
-        name: editingCustomer.name,
-        number: editingCustomer.number,
-        location: editingCustomer.location
-      });
-
-      setIsEditDialogOpen(false);
-      setEditingCustomer(null);
-      toast.success('Customer updated in cloud');
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, customerPath);
-    }
+    const newCustomers = customers.map(c => 
+      c.id === editingCustomer.id ? editingCustomer : c
+    );
+    
+    persistCustomers(newCustomers);
+    setIsEditDialogOpen(false);
+    setEditingCustomer(null);
+    toast.success('Customer updated locally');
   };
 
-  const handleUpdateSettings = async (e: React.FormEvent) => {
+  const handleUpdateSettings = (e: React.FormEvent) => {
     e.preventDefault();
-    await persistSettings(settings);
+    persistSettings(settings);
     setIsSettingsDialogOpen(false);
-    toast.success('Settings updated and synced to cloud');
+    toast.success('Settings updated locally');
   };
 
   const confirmDelete = (id: string) => {
@@ -440,17 +256,13 @@ export default function App() {
     setIsDeleteDialogOpen(true);
   };
 
-  const handleDeleteCustomer = async () => {
+  const handleDeleteCustomer = () => {
     if (customerToDelete) {
-      const customerPath = `customers/${customerToDelete}`;
-      try {
-        await deleteDoc(doc(db, 'customers', customerToDelete));
-        setIsDeleteDialogOpen(false);
-        setCustomerToDelete(null);
-        toast.info('Customer removed from cloud');
-      } catch (error) {
-        handleFirestoreError(error, OperationType.DELETE, customerPath);
-      }
+      const newCustomers = customers.filter(c => c.id !== customerToDelete);
+      persistCustomers(newCustomers);
+      setIsDeleteDialogOpen(false);
+      setCustomerToDelete(null);
+      toast.info('Customer removed locally');
     }
   };
 
@@ -505,44 +317,10 @@ export default function App() {
       <Toaster position="top-right" richColors />
       
       <div className="max-w-6xl mx-auto space-y-8">
-        {!user && !loading ? (
-          <div className="flex flex-col items-center justify-center py-24 space-y-8 text-center">
-            <div className="bg-primary p-6 rounded-2xl text-primary-foreground shadow-2xl">
-              <Bell className="w-16 h-16" />
-            </div>
-            <div className="space-y-2">
-              <h2 className="text-5xl font-black tracking-tighter uppercase">Orma AI</h2>
-              <p className="text-muted-foreground font-bold uppercase tracking-[0.3em] text-sm">Remember everyone</p>
-            </div>
-            <p className="max-w-md text-muted-foreground font-medium leading-relaxed">
-              Securely track your telecom porting eligibility in the cloud. 
-              Login to access your registry from any device.
-            </p>
-            <Button 
-              size="lg" 
-              onClick={async () => {
-                try {
-                  await signInWithGoogle();
-                } catch (error: any) {
-                  console.error("Login Error:", error);
-                  toast.error(error.message || "Failed to sign in. If you are on a custom domain, ensure it is added to Firebase Authorized Domains.");
-                }
-              }}
-              className="h-14 px-10 bg-foreground text-background hover:bg-foreground/90 font-black uppercase text-xs tracking-[0.2em] rounded-none"
-            >
-              <LogIn className="w-5 h-5 mr-3" />
-              Get Started
-            </Button>
-          </div>
-        ) : loading ? (
-          <div className="flex items-center justify-center py-48">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-foreground"></div>
-          </div>
-        ) : (
-          <>
+        <>
             {/* Notification Setup Dialog */}
             <Dialog 
-              open={!!user && permissionStatus === 'default' && !settings.hasDismissedPromo} 
+              open={permissionStatus === 'default' && !settings.hasDismissedPromo} 
               onOpenChange={(open) => {
                 if (!open) {
                   const newSettings = { ...settings, hasDismissedPromo: true };
@@ -649,35 +427,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2">
-            {!loading && (
-              user ? (
-                <div className="flex items-center gap-3 mr-4">
-                  <div className="flex flex-col items-end hidden sm:flex">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-foreground">{user.displayName}</span>
-                    <span className="text-[8px] font-bold text-muted-foreground uppercase tracking-tighter">{user.email}</span>
-                  </div>
-                  <Button 
-                    variant="outline" 
-                    size="sm" 
-                    onClick={logout}
-                    className="h-9 px-4 text-foreground font-black uppercase text-[10px] tracking-widest rounded-none border-foreground/10"
-                  >
-                    <LogOut className="w-3.5 h-3.5 mr-2" />
-                    Logout
-                  </Button>
-                </div>
-              ) : (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
-                  onClick={signInWithGoogle}
-                  className="h-9 px-4 text-foreground font-black uppercase text-[10px] tracking-widest rounded-none border-foreground/10 mr-4"
-                >
-                  <LogIn className="w-3.5 h-3.5 mr-2" />
-                  Login with Google
-                </Button>
-              )
-            )}
             <Button
               variant="outline"
               size="icon"
@@ -728,60 +477,31 @@ export default function App() {
                       />
                       <p className="text-[10px] text-muted-foreground font-medium">Show red pulsing alert when eligibility is within this many days.</p>
                     </div>
-                    <div className="space-y-2">
-                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Push Notifications</Label>
-                      <div className="flex items-center justify-between p-3 border border-foreground/10 rounded-none bg-muted/30">
-                        <div className="space-y-0.5">
-                          <p className="text-[10px] font-black uppercase tracking-wider">Cloud Alerts</p>
-                          <p className="text-[9px] text-muted-foreground font-medium">Get notified even when the app is closed.</p>
-                        </div>
-                        <Button 
-                          type="button"
-                          variant="outline" 
-                          size="sm" 
-                          onClick={handleEnableNotifications}
-                          className="h-8 px-3 text-[9px] font-black uppercase tracking-widest rounded-none border-foreground/20"
-                        >
-                          Enable
-                        </Button>
-                      </div>
-                      <Button 
-                        type="button"
-                        variant="ghost" 
-                        size="sm" 
-                        onClick={handleTestNotification}
-                        className="w-full h-8 text-[9px] font-black uppercase tracking-widest rounded-none border border-dashed border-foreground/10 hover:bg-muted"
-                      >
-                        Send Test Notification
-                      </Button>
-                    </div>
-                    
                     <div className="space-y-4 pt-2 border-t border-foreground/5">
-                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Email Intelligence</Label>
-                      <div className="flex items-center justify-between p-3 border border-foreground/10 rounded-none bg-muted/30">
-                        <div className="space-y-0.5">
-                          <p className="text-[10px] font-black uppercase tracking-wider">Email Notifications</p>
-                          <p className="text-[9px] text-muted-foreground font-medium">Receive eligibility reports via email.</p>
-                        </div>
-                        <Switch 
-                          checked={settings.enableEmailNotifications}
-                          onCheckedChange={checked => setSettings({ ...settings, enableEmailNotifications: checked })}
-                        />
-                      </div>
+                      <Label htmlFor="email" className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Notification Email</Label>
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="your@email.com"
+                        className="font-mono"
+                        value={settings.userEmail || ''}
+                        onChange={e => setSettings({ ...settings, userEmail: e.target.value })}
+                      />
+                      <p className="text-[10px] text-muted-foreground font-medium">Email used for eligibility reports. Note: Cloud sync is disabled.</p>
+                      
                       <Button 
                         type="button"
                         variant="ghost" 
                         size="sm" 
                         onClick={handleTestEmail}
-                        disabled={!settings.enableEmailNotifications}
-                        className="w-full h-8 text-[9px] font-black uppercase tracking-widest rounded-none border border-dashed border-foreground/10 hover:bg-muted disabled:opacity-30"
+                        className="w-full h-8 text-[9px] font-black uppercase tracking-widest rounded-none border border-dashed border-foreground/10 hover:bg-muted mt-2"
                       >
                         Send Test Email
                       </Button>
                     </div>
                   </div>
                   <DialogFooter>
-                    <Button type="submit" className="w-full">Save Preferences</Button>
+                    <Button type="submit" className="w-full font-black uppercase tracking-widest text-[10px] h-12 rounded-none">Save Settings</Button>
                   </DialogFooter>
                 </form>
               </DialogContent>
@@ -1213,7 +933,6 @@ export default function App() {
           <span>90-Day Porting Intelligence Protocol</span>
         </div>
       </>
-    )}
 
     {/* Delete Confirmation Dialog */}
     <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
@@ -1226,7 +945,7 @@ export default function App() {
           <AlertDialogDescription className="font-medium text-muted-foreground">
             This action cannot be undone. This will permanently remove <span className="font-bold text-foreground">
               {customers.find(c => c.id === customerToDelete)?.name}
-            </span> from your cloud registry.
+            </span> from your registry.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter className="mt-6">
