@@ -69,8 +69,30 @@ const DEFAULT_SETTINGS: Settings = {
 
 export default function App() {
   const { theme, setTheme } = useTheme();
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('orma_customers');
+        return saved ? JSON.parse(saved) : [];
+      } catch (e) {
+        console.error('Failed to parse customers', e);
+        return [];
+      }
+    }
+    return [];
+  });
+  const [settings, setSettings] = useState<Settings>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('orma_settings');
+        return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+      } catch (e) {
+        console.error('Failed to parse settings', e);
+        return DEFAULT_SETTINGS;
+      }
+    }
+    return DEFAULT_SETTINGS;
+  });
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -90,24 +112,18 @@ export default function App() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
 
-  // Load and sync customers from localStorage
-  useEffect(() => {
-    const savedCustomers = localStorage.getItem('orma_customers');
-    if (savedCustomers) {
-      try {
-        setCustomers(JSON.parse(savedCustomers));
-      } catch (e) {
-        console.error('Failed to parse customers', e);
-      }
-    }
-  }, []);
-
+  // Local storage persistence helpers
   const persistCustomers = (newCustomers: Customer[]) => {
     setCustomers(newCustomers);
     localStorage.setItem('orma_customers', JSON.stringify(newCustomers));
   };
 
-  // Push notifications removed as they depend on FCM/Service workers linked to Firebase
+  const persistSettings = (newSettings: Settings) => {
+    setSettings(newSettings);
+    localStorage.setItem('orma_settings', JSON.stringify(newSettings));
+  };
+
+  // Handle Push Notifications
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       setPermissionStatus(Notification.permission);
@@ -165,23 +181,6 @@ export default function App() {
       console.error('Test email failed:', error);
       toast.error('Failed to connect to server');
     }
-  };
-
-  // Load and sync settings from localStorage
-  useEffect(() => {
-    const savedSettings = localStorage.getItem('orma_settings');
-    if (savedSettings) {
-      try {
-        setSettings(JSON.parse(savedSettings));
-      } catch (e) {
-        console.error('Failed to parse settings', e);
-      }
-    }
-  }, []);
-
-  const persistSettings = (newSettings: Settings) => {
-    setSettings(newSettings);
-    localStorage.setItem('orma_settings', JSON.stringify(newSettings));
   };
 
   // Check for notifications on load and periodic intervals
