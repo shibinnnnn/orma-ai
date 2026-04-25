@@ -106,8 +106,9 @@ export default function App() {
     location: '',
     addedAtMode: 'today' as 'today' | 'custom',
     customAddedAt: '',
-    portingDateMode: 'auto' as 'auto' | 'manual',
+    portingDateMode: 'auto' as 'auto' | 'manual' | 'days',
     manualPortingDate: '',
+    portingDaysOffset: '90',
   });
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
@@ -222,6 +223,11 @@ export default function App() {
 
     if (newCustomer.portingDateMode === 'manual' && newCustomer.manualPortingDate) {
       portingDate = new Date(newCustomer.manualPortingDate).toISOString();
+    } else if (newCustomer.portingDateMode === 'days') {
+      const days = parseInt(newCustomer.portingDaysOffset) || 90;
+      const date = new Date(addedAt);
+      date.setDate(date.getDate() + days);
+      portingDate = date.toISOString();
     }
 
     const customer: Customer = {
@@ -241,7 +247,8 @@ export default function App() {
       addedAtMode: 'today', 
       customAddedAt: '', 
       portingDateMode: 'auto', 
-      manualPortingDate: '' 
+      manualPortingDate: '',
+      portingDaysOffset: '90' 
     });
     setIsAddDialogOpen(false);
     toast.success('Customer added successfully');
@@ -620,17 +627,32 @@ export default function App() {
                     <div className="space-y-3 pt-2">
                        <div className="flex items-center justify-between">
                         <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Porting Date</Label>
-                        <div className="flex items-center gap-2">
-                          <span className={`text-[9px] uppercase font-black ${newCustomer.portingDateMode === 'auto' ? 'text-primary' : 'text-muted-foreground opacity-50'}`}>Auto</span>
-                          <Switch 
-                            checked={newCustomer.portingDateMode === 'manual'}
-                            onCheckedChange={checked => setNewCustomer({ ...newCustomer, portingDateMode: checked ? 'manual' : 'auto' })}
-                          />
-                          <span className={`text-[9px] uppercase font-black ${newCustomer.portingDateMode === 'manual' ? 'text-primary' : 'text-muted-foreground opacity-50'}`}>Pick</span>
+                        <div className="flex bg-muted/40 p-0.5 rounded-sm border border-foreground/5">
+                          <button
+                            type="button"
+                            onClick={() => setNewCustomer({ ...newCustomer, portingDateMode: 'auto' })}
+                            className={`px-2 py-1 text-[9px] font-black uppercase transition-all ${newCustomer.portingDateMode === 'auto' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            Auto
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewCustomer({ ...newCustomer, portingDateMode: 'days' })}
+                            className={`px-2 py-1 text-[9px] font-black uppercase transition-all ${newCustomer.portingDateMode === 'days' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            Days
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setNewCustomer({ ...newCustomer, portingDateMode: 'manual' })}
+                            className={`px-2 py-1 text-[9px] font-black uppercase transition-all ${newCustomer.portingDateMode === 'manual' ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground'}`}
+                          >
+                            Date
+                          </button>
                         </div>
                       </div>
 
-                      {newCustomer.portingDateMode === 'manual' ? (
+                      {newCustomer.portingDateMode === 'manual' && (
                         <div className="relative animate-in fade-in slide-in-from-top-1 duration-200">
                           <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
                           <Input
@@ -640,10 +662,37 @@ export default function App() {
                             onChange={e => setNewCustomer({ ...newCustomer, manualPortingDate: e.target.value })}
                           />
                         </div>
-                      ) : (
+                      )}
+
+                      {newCustomer.portingDateMode === 'days' && (
+                        <div className="flex items-center space-x-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <div className="relative flex-1">
+                            <Clock className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                            <Input
+                              type="number"
+                              placeholder="Days"
+                              className="pl-10 font-mono text-xs h-10 border-foreground/10 rounded-none"
+                              value={newCustomer.portingDaysOffset}
+                              onChange={e => setNewCustomer({ ...newCustomer, portingDaysOffset: e.target.value })}
+                            />
+                          </div>
+                          <span className="text-[10px] font-black uppercase text-muted-foreground">Days</span>
+                        </div>
+                      )}
+
+                      {newCustomer.portingDateMode !== 'manual' && (
                         <div className="p-3 border border-dashed border-foreground/10 bg-muted/10 text-center">
-                          <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
-                            Estimated: {formatDate(calculatePortingDate(newCustomer.addedAtMode === 'today' ? new Date().toISOString() : new Date(newCustomer.customAddedAt || new Date()).toISOString()))}
+                          <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest leading-relaxed">
+                            {newCustomer.portingDateMode === 'auto' ? 'Standard (90 Days)' : `Custom (${newCustomer.portingDaysOffset || 0} Days)`}
+                            <br />
+                            <span className="text-foreground/60">Eligible: {formatDate(
+                              (() => {
+                                const baseDate = newCustomer.addedAtMode === 'today' ? new Date() : new Date(newCustomer.customAddedAt || new Date());
+                                const offset = newCustomer.portingDateMode === 'auto' ? 90 : (parseInt(newCustomer.portingDaysOffset) || 0);
+                                baseDate.setDate(baseDate.getDate() + offset);
+                                return baseDate.toISOString();
+                              })()
+                            )}</span>
                           </p>
                         </div>
                       )}
