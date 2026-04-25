@@ -82,6 +82,10 @@ export default function App() {
     name: '',
     number: '',
     location: '',
+    addedAtMode: 'today' as 'today' | 'custom',
+    customAddedAt: '',
+    portingDateMode: 'auto' as 'auto' | 'manual',
+    manualPortingDate: '',
   });
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
@@ -211,20 +215,37 @@ export default function App() {
       return;
     }
 
-    const addedAt = new Date().toISOString();
-    const portingDate = calculatePortingDate(addedAt);
+    const addedAt = newCustomer.addedAtMode === 'today' 
+      ? new Date().toISOString() 
+      : new Date(newCustomer.customAddedAt || new Date()).toISOString();
+
+    let portingDate = calculatePortingDate(addedAt);
+
+    if (newCustomer.portingDateMode === 'manual' && newCustomer.manualPortingDate) {
+      portingDate = new Date(newCustomer.manualPortingDate).toISOString();
+    }
 
     const customer: Customer = {
-      ...newCustomer,
+      name: newCustomer.name,
+      number: newCustomer.number,
+      location: newCustomer.location,
       id: crypto.randomUUID(),
       addedAt,
       portingDate,
     };
 
     persistCustomers([customer, ...customers]);
-    setNewCustomer({ name: '', number: '', location: '' });
+    setNewCustomer({ 
+      name: '', 
+      number: '', 
+      location: '', 
+      addedAtMode: 'today', 
+      customAddedAt: '', 
+      portingDateMode: 'auto', 
+      manualPortingDate: '' 
+    });
     setIsAddDialogOpen(false);
-    toast.success('Customer added locally');
+    toast.success('Customer added successfully');
   };
 
   const handleUpdateCustomer = (e: React.FormEvent) => {
@@ -559,6 +580,76 @@ export default function App() {
                       />
                     </div>
                   </div>
+
+                  <div className="space-y-4 pt-2 border-t border-foreground/5">
+                    <div className="space-y-3">
+                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Activation Date</Label>
+                      <div className="flex gap-2 p-1 bg-muted/30 border border-foreground/10 rounded-none">
+                        <Button
+                          type="button"
+                          variant={newCustomer.addedAtMode === 'today' ? 'default' : 'ghost'}
+                          size="sm"
+                          className="flex-1 text-[10px] uppercase font-black tracking-widest h-8 rounded-none"
+                          onClick={() => setNewCustomer({ ...newCustomer, addedAtMode: 'today' })}
+                        >
+                          Today
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={newCustomer.addedAtMode === 'custom' ? 'default' : 'ghost'}
+                          size="sm"
+                          className="flex-1 text-[10px] uppercase font-black tracking-widest h-8 rounded-none"
+                          onClick={() => setNewCustomer({ ...newCustomer, addedAtMode: 'custom' })}
+                        >
+                          Pick
+                        </Button>
+                      </div>
+                      
+                      {newCustomer.addedAtMode === 'custom' && (
+                        <div className="relative animate-in fade-in slide-in-from-top-1 duration-200">
+                          <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                          <Input
+                            type="date"
+                            className="pl-10 font-mono text-xs h-10 border-foreground/10 rounded-none"
+                            value={newCustomer.customAddedAt}
+                            onChange={e => setNewCustomer({ ...newCustomer, customAddedAt: e.target.value })}
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="space-y-3 pt-2">
+                       <div className="flex items-center justify-between">
+                        <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Porting Date</Label>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[9px] uppercase font-black ${newCustomer.portingDateMode === 'auto' ? 'text-primary' : 'text-muted-foreground opacity-50'}`}>Auto</span>
+                          <Switch 
+                            checked={newCustomer.portingDateMode === 'manual'}
+                            onCheckedChange={checked => setNewCustomer({ ...newCustomer, portingDateMode: checked ? 'manual' : 'auto' })}
+                          />
+                          <span className={`text-[9px] uppercase font-black ${newCustomer.portingDateMode === 'manual' ? 'text-primary' : 'text-muted-foreground opacity-50'}`}>Pick</span>
+                        </div>
+                      </div>
+
+                      {newCustomer.portingDateMode === 'manual' ? (
+                        <div className="relative animate-in fade-in slide-in-from-top-1 duration-200">
+                          <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                          <Input
+                            type="date"
+                            className="pl-10 font-mono text-xs h-10 border-foreground/10 rounded-none"
+                            value={newCustomer.manualPortingDate}
+                            onChange={e => setNewCustomer({ ...newCustomer, manualPortingDate: e.target.value })}
+                          />
+                        </div>
+                      ) : (
+                        <div className="p-3 border border-dashed border-foreground/10 bg-muted/10 text-center">
+                          <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-widest">
+                            Estimated: {formatDate(calculatePortingDate(newCustomer.addedAtMode === 'today' ? new Date().toISOString() : new Date(newCustomer.customAddedAt || new Date()).toISOString()))}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <DialogFooter>
                     <Button type="submit" className="w-full">Save Customer</Button>
                   </DialogFooter>
@@ -615,6 +706,21 @@ export default function App() {
                         onChange={e => setEditingCustomer({ ...editingCustomer, location: e.target.value })}
                       />
                     </div>
+                  </div>
+
+                  <div className="space-y-2 pt-2 border-t border-foreground/5">
+                    <Label htmlFor="edit-date" className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Porting Date</Label>
+                    <div className="relative">
+                      <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                      <Input
+                        id="edit-date"
+                        type="date"
+                        className="pl-10 font-mono"
+                        value={editingCustomer.portingDate.split('T')[0]}
+                        onChange={e => setEditingCustomer({ ...editingCustomer, portingDate: new Date(e.target.value).toISOString() })}
+                      />
+                    </div>
+                    <p className="text-[10px] text-muted-foreground font-medium">Update the customer's eligibility date manually.</p>
                   </div>
                   <DialogFooter>
                     <Button type="submit" className="w-full">Update Details</Button>
