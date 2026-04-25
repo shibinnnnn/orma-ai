@@ -5,7 +5,7 @@
 
 import * as React from 'react';
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Search, MapPin, Phone, User, Calendar, Bell, Trash2, AlertCircle, AlertTriangle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon } from 'lucide-react';
+import { Plus, Search, MapPin, Phone, User as UserIcon, Calendar, Bell, Trash2, AlertCircle, AlertTriangle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon, LogOut, Loader2, ShieldAlert, ShieldCheck, Globe } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTheme } from 'next-themes';
@@ -16,6 +16,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   Dialog,
   DialogContent,
@@ -38,6 +39,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
@@ -52,8 +54,14 @@ import {
 } from '@/components/ui/alert-dialog';
 import { Separator } from '@/components/ui/separator';
 
-import { Customer, Settings } from './types';
+import { Customer, Settings, User } from './types';
 import { calculatePortingDate, getPortingStatus, formatDate } from './lib/date-utils';
+
+declare global {
+  interface Window {
+    google: any;
+  }
+}
 
 type SortConfig = {
   key: 'name' | 'addedAt' | 'portingDate';
@@ -69,30 +77,11 @@ const DEFAULT_SETTINGS: Settings = {
 
 export default function App() {
   const { theme, setTheme } = useTheme();
-  const [customers, setCustomers] = useState<Customer[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('orma_customers');
-        return saved ? JSON.parse(saved) : [];
-      } catch (e) {
-        console.error('Failed to parse customers', e);
-        return [];
-      }
-    }
-    return [];
-  });
-  const [settings, setSettings] = useState<Settings>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem('orma_settings');
-        return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
-      } catch (e) {
-        console.error('Failed to parse settings', e);
-        return DEFAULT_SETTINGS;
-      }
-    }
-    return DEFAULT_SETTINGS;
-  });
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoadingAuth, setIsLoadingAuth] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortConfig, setSortConfig] = useState<SortConfig>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
@@ -113,15 +102,184 @@ export default function App() {
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
   const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
 
-  // Local storage persistence helpers
+  // Phone Login States
+  const [loginMethod, setLoginMethod] = useState<'google' | 'phone'>('google');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otp, setOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // Auth Initialization
+  useEffect(() => {
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/auth/me');
+        const data = await res.json();
+        if (data.user) {
+          setUser(data.user);
+          await fetchData();
+        }
+      } catch (e) {
+        console.error('Auth check failed', e);
+      } finally {
+        setIsLoadingAuth(false);
+      }
+    }
+    checkAuth();
+  }, []);
+
+  // Google One Tap / Button Setup
+  useEffect(() => {
+    if (!isLoadingAuth && !user) {
+      const clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+      if (!clientId) {
+        console.warn('VITE_GOOGLE_CLIENT_ID is not set. Google Login will be unavailable.');
+        return;
+      }
+
+      const handleCallback = async (response: any) => {
+        try {
+          const res = await fetch('/api/auth/google', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ credential: response.credential }),
+          });
+          const data = await res.json();
+          if (data.user) {
+            setUser(data.user);
+            await fetchData();
+            toast.success(`Welcome, ${data.user.name}`);
+          }
+        } catch (e) {
+          toast.error('Login failed');
+          console.error(e);
+        }
+      };
+
+      const initGoogle = () => {
+        if (window.google) {
+          window.google.accounts.id.initialize({
+            client_id: clientId,
+            callback: handleCallback,
+            auto_select: false,
+            use_fedcm_for_prompt: false
+          });
+          const btn = document.getElementById('google-signin-button');
+          if (btn) {
+            window.google.accounts.id.renderButton(
+              btn,
+              { theme: 'outline', size: 'large', width: 250 }
+            );
+          }
+          window.google.accounts.id.prompt();
+        } else {
+          setTimeout(initGoogle, 100);
+        }
+      };
+
+      initGoogle();
+    }
+  }, [isLoadingAuth, user]);
+
+  const fetchData = async () => {
+    try {
+      const res = await fetch('/api/data');
+      if (res.ok) {
+        const data = await res.json();
+        setCustomers(data.customers || []);
+        setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
+      }
+    } catch (e) {
+      console.error('Failed to fetch data', e);
+    }
+  };
+
+  const syncData = async (newCustomers: Customer[], newSettings: Settings) => {
+    if (!user) return;
+    setIsSyncing(true);
+    try {
+      await fetch('/api/data', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customers: newCustomers, settings: newSettings }),
+      });
+    } catch (e) {
+      toast.error('Sync failed');
+      console.error(e);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const persistCustomers = (newCustomers: Customer[]) => {
     setCustomers(newCustomers);
-    localStorage.setItem('orma_customers', JSON.stringify(newCustomers));
+    syncData(newCustomers, settings);
   };
 
   const persistSettings = (newSettings: Settings) => {
     setSettings(newSettings);
-    localStorage.setItem('orma_settings', JSON.stringify(newSettings));
+    syncData(customers, newSettings);
+  };
+
+  const logout = async () => {
+    try {
+      await fetch('/api/auth/logout', { method: 'POST' });
+      setUser(null);
+      setCustomers([]);
+      setSettings(DEFAULT_SETTINGS);
+      setOtpSent(false);
+      setPhoneNumber('');
+      setOtp('');
+      toast.info('Logged out successfully');
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleSendOtp = async () => {
+    if (!phoneNumber) return toast.error('Enter phone number');
+    setIsLoggingIn(true);
+    try {
+      const res = await fetch('/api/auth/phone/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneNumber }),
+      });
+      if (res.ok) {
+        setOtpSent(true);
+        toast.success('OTP sent! Check server logs.');
+      } else {
+        toast.error('Failed to send OTP');
+      }
+    } catch (e) {
+      toast.error('Failed to send OTP');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!otp) return toast.error('Enter OTP');
+    setIsLoggingIn(true);
+    try {
+      const res = await fetch('/api/auth/phone/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone: phoneNumber, otp }),
+      });
+      const data = await res.json();
+      if (data.user) {
+        setUser(data.user);
+        await fetchData();
+        toast.success(`Welcome back!`);
+      } else {
+        toast.error(data.error || 'Verification failed');
+      }
+    } catch (e) {
+      toast.error('Verification failed');
+    } finally {
+      setIsLoggingIn(false);
+    }
   };
 
   // Handle Push Notifications
@@ -336,14 +494,146 @@ export default function App() {
   }, [customers, searchQuery, sortConfig]);
 
   const stats = useMemo(() => {
-    const eligible = customers.filter(c => getPortingStatus(c.portingDate, settings.nearDays, settings.veryNearDays).isEligible).length;
+    const eligible = customers.filter(c => getPortingStatus(c.addedAt, c.portingDate, settings.nearDays, settings.veryNearDays).isEligible).length;
     const near = customers.filter(c => {
-      const s = getPortingStatus(c.portingDate, settings.nearDays, settings.veryNearDays);
+      const s = getPortingStatus(c.addedAt, c.portingDate, settings.nearDays, settings.veryNearDays);
       return s.isNear && !s.isEligible;
     }).length;
 
     return { total: customers.length, eligible, near };
   }, [customers, settings]);
+
+  if (isLoadingAuth) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-background p-4 flex items-center justify-center font-sans overflow-hidden">
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="w-full max-w-md space-y-8"
+        >
+          <div className="text-center space-y-4">
+            <div className="inline-flex bg-primary p-4 rounded-2xl text-primary-foreground shadow-2xl shadow-primary/20 rotate-3">
+              <ShieldAlert className="w-10 h-10" />
+            </div>
+            <div className="space-y-2">
+              <h1 className="text-5xl font-black tracking-tighter text-foreground italic">
+                Orm.AI
+              </h1>
+              <p className="text-muted-foreground font-medium tracking-tight uppercase text-xs">
+                90-Day Porting Intelligence Protocol
+              </p>
+            </div>
+          </div>
+
+          <Card className="border shadow-2xl rounded-3xl overflow-hidden relative group">
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/5 via-transparent to-transparent opacity-50" />
+            <CardHeader className="text-center relative pt-8">
+              <CardTitle className="text-xl font-bold tracking-tight">Access Secure Registry</CardTitle>
+              <CardDescription>
+                Authenticate to manage your customer porting protocol.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="relative flex flex-col items-center pb-8 pt-4 px-8 space-y-6">
+              
+              <div className="flex w-full p-1 bg-muted rounded-xl mb-2">
+                <Button 
+                  variant={loginMethod === 'google' ? 'secondary' : 'ghost'} 
+                  className="flex-1 rounded-lg text-xs font-bold uppercase tracking-wider h-9"
+                  onClick={() => setLoginMethod('google')}
+                >
+                  Google
+                </Button>
+                <Button 
+                  variant={loginMethod === 'phone' ? 'secondary' : 'ghost'} 
+                  className="flex-1 rounded-lg text-xs font-bold uppercase tracking-wider h-9"
+                  onClick={() => setLoginMethod('phone')}
+                >
+                  Phone
+                </Button>
+              </div>
+
+              {loginMethod === 'google' ? (
+                <div id="google-signin-button" className="min-h-[50px] flex items-center justify-center transition-transform hover:scale-105 active:scale-95" />
+              ) : (
+                <div className="w-full space-y-4">
+                  {!otpSent ? (
+                    <div className="space-y-4">
+                      <div className="relative">
+                        <Phone className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                        <Input 
+                          placeholder="Phone Number" 
+                          className="pl-10 h-12 rounded-xl"
+                          value={phoneNumber}
+                          onChange={e => setPhoneNumber(e.target.value)}
+                        />
+                      </div>
+                      <Button 
+                        className="w-full h-12 rounded-xl text-sm font-bold tracking-tight"
+                        disabled={isLoggingIn}
+                        onClick={handleSendOtp}
+                      >
+                        {isLoggingIn ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                        Send OTP
+                      </Button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      <Input 
+                        placeholder="6-Digit OTP" 
+                        className="h-12 rounded-xl text-center text-xl tracking-[0.5em] font-black"
+                        maxLength={6}
+                        value={otp}
+                        onChange={e => setOtp(e.target.value)}
+                      />
+                      <Button 
+                        className="w-full h-12 rounded-xl text-sm font-bold tracking-tight"
+                        disabled={isLoggingIn}
+                        onClick={handleVerifyOtp}
+                      >
+                        {isLoggingIn ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                        Verify & Login
+                      </Button>
+                      <Button 
+                        variant="ghost" 
+                        className="w-full text-xs uppercase tracking-widest text-muted-foreground"
+                        onClick={() => setOtpSent(false)}
+                      >
+                        Change Number
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              <div className="pt-4 border-t w-full flex items-center justify-center gap-6 opacity-30">
+                <div className="flex items-center gap-1.5 grayscale">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span className="text-[10px] uppercase font-black tracking-tighter">Encrypted</span>
+                </div>
+                <div className="flex items-center gap-1.5 grayscale">
+                  <Globe className="w-4 h-4" />
+                  <span className="text-[10px] uppercase font-black tracking-tighter">Synced</span>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <p className="text-center text-[10px] text-muted-foreground uppercase tracking-[0.3em] font-bold opacity-30 pt-8 italic">
+            Authorized Personnel Only
+          </p>
+        </motion.div>
+        <Toaster position="top-right" richColors />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8 font-sans transition-colors duration-300">
@@ -450,29 +740,59 @@ export default function App() {
           <div className="space-y-1">
             <h1 className="text-4xl font-black tracking-tight text-foreground flex items-center gap-3">
               <div className="bg-primary p-2 rounded-lg text-primary-foreground shadow-none">
-                <Bell className="w-8 h-8" />
+                <ShieldAlert className="w-8 h-8" />
               </div>
               Orm.AI
+              {isSyncing && (
+                <div className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-primary"></span>
+                </div>
+              )}
             </h1>
-            <p className="text-muted-foreground font-medium tracking-wide uppercase text-xs">Remember everyone</p>
+            <p className="text-muted-foreground font-medium tracking-wide uppercase text-xs">Remember everyone • Premium Retention Protocol</p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="icon"
-              className="rounded-full shadow-sm"
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            >
-              <Sun className="h-5 w-5 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
-              <Moon className="absolute h-5 w-5 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
-              <span className="sr-only">Toggle theme</span>
-            </Button>
+          <div className="flex items-center gap-3">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" className="rounded-full pl-1 pr-4 py-1 h-10 gap-2 border-foreground/10 hover:bg-muted/50 transition-all">
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src={user.picture} />
+                    <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                  </Avatar>
+                  <span className="text-xs font-bold uppercase tracking-tight">{user.name.split(' ')[0]}</span>
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56 rounded-xl p-2 border-foreground/10">
+                <div className="flex items-center gap-2 p-2 mb-2">
+                  <Avatar className="h-10 w-10">
+                    <AvatarImage src={user.picture} />
+                    <AvatarFallback>{user.name.charAt(0)}</AvatarFallback>
+                  </Avatar>
+                  <div className="flex flex-col min-w-0">
+                    <span className="text-sm font-bold truncate tracking-tight">{user.name}</span>
+                    <span className="text-[10px] text-muted-foreground truncate font-mono uppercase opacity-50">{user.email}</span>
+                  </div>
+                </div>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => setIsSettingsDialogOpen(true)} className="rounded-lg h-9 gap-2">
+                  <SettingsIcon className="w-4 h-4 opacity-50" />
+                  <span className="text-xs font-bold uppercase tracking-tight">Protocol Settings</span>
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="rounded-lg h-9 gap-2">
+                  {theme === 'dark' ? <Sun className="w-4 h-4 opacity-50" /> : <Moon className="w-4 h-4 opacity-50" />}
+                  <span className="text-xs font-bold uppercase tracking-tight">{theme === 'dark' ? 'Light Mode' : 'Dark Mode'}</span>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={logout} className="rounded-lg h-9 gap-2 text-destructive focus:text-destructive focus:bg-destructive/10">
+                  <LogOut className="w-4 h-4" />
+                  <span className="text-xs font-bold uppercase tracking-tight">Terminate Session</span>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
 
             <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
-              <DialogTrigger render={<Button variant="outline" size="icon" className="rounded-full shadow-sm" />}>
-                <SettingsIcon className="w-5 h-5" />
-              </DialogTrigger>
               <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
                   <DialogTitle>Notification Settings</DialogTitle>
@@ -518,7 +838,7 @@ export default function App() {
                         value={settings.userEmail || ''}
                         onChange={e => setSettings({ ...settings, userEmail: e.target.value })}
                       />
-                      <p className="text-[10px] text-muted-foreground font-medium">Email used for eligibility reports. Note: Cloud sync is disabled.</p>
+                      <p className="text-[10px] text-muted-foreground font-medium">Email used for eligibility reports.</p>
                       
                       <Button 
                         type="button"
@@ -539,9 +859,11 @@ export default function App() {
             </Dialog>
 
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-              <DialogTrigger render={<Button size="lg" className="rounded-full shadow-lg hover:shadow-xl transition-all" />}>
-                <Plus className="w-5 h-5 mr-2" />
-                Add Customer
+              <DialogTrigger asChild>
+                <Button size="lg" className="rounded-full shadow-lg hover:shadow-xl transition-all h-12 px-6">
+                  <Plus className="w-5 h-5 mr-2" />
+                  Add Customer
+                </Button>
               </DialogTrigger>
               <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
@@ -554,7 +876,7 @@ export default function App() {
                   <div className="space-y-2">
                     <Label htmlFor="name" className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Customer Name</Label>
                     <div className="relative">
-                      <User className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                      <UserIcon className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
                       <Input
                         id="name"
                         placeholder="John Doe"
@@ -723,7 +1045,7 @@ export default function App() {
                   <div className="space-y-2">
                     <Label htmlFor="edit-name" className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Customer Name</Label>
                     <div className="relative">
-                      <User className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                      <UserIcon className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
                       <Input
                         id="edit-name"
                         placeholder="John Doe"
@@ -890,7 +1212,7 @@ export default function App() {
           <Card className="border shadow-none bg-card overflow-hidden relative rounded-none">
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-[10px] font-bold uppercase tracking-[0.2em] text-muted-foreground">Total Customers</CardTitle>
-              <User className="w-4 h-4 text-muted-foreground opacity-50" />
+              <UserIcon className="w-4 h-4 text-muted-foreground opacity-50" />
             </CardHeader>
             <CardContent>
               <div className="text-5xl font-black font-mono tracking-tighter">{stats.total}</div>
