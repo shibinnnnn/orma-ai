@@ -470,7 +470,14 @@ export default function App() {
             </p>
             <Button 
               size="lg" 
-              onClick={signInWithGoogle}
+              onClick={async () => {
+                try {
+                  await signInWithGoogle();
+                } catch (error: any) {
+                  console.error("Login Error:", error);
+                  toast.error(error.message || "Failed to sign in. If you are on a custom domain, ensure it is added to Firebase Authorized Domains.");
+                }
+              }}
               className="h-14 px-10 bg-foreground text-background hover:bg-foreground/90 font-black uppercase text-xs tracking-[0.2em] rounded-none"
             >
               <LogIn className="w-5 h-5 mr-3" />
