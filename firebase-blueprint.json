@@ -24,6 +24,20 @@
         "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
       },
       "required": ["token", "updatedAt"]
+    },
+    "Settings": {
+      "title": "User Settings",
+      "description": "Stores user preferences including notification settings",
+      "type": "object",
+      "properties": {
+        "nearDays": { "type": "integer", "description": "Warning threshold" },
+        "veryNearDays": { "type": "integer", "description": "Urgent threshold" },
+        "enableEmailNotifications": { "type": "boolean", "description": "Toggle for email alerts" },
+        "hasDismissedPromo": { "type": "boolean", "description": "Whether the user dismissed the notification setup promo" },
+        "userEmail": { "type": "string", "format": "email", "description": "User's email for notifications" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["nearDays", "veryNearDays", "enableEmailNotifications", "hasDismissedPromo"]
     }
   },
   "firestore": {
@@ -34,6 +48,10 @@
     "/fcm_tokens/{userId}": {
       "schema": "FCMToken",
       "description": "Collection of user FCM tokens"
+    },
+    "/settings/{userId}": {
+      "schema": "Settings",
+      "description": "User specific settings and preferences"
     }
   }
 }

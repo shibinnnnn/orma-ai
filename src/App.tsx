@@ -10,13 +10,14 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTheme } from 'next-themes';
 import { useAuthState } from 'react-firebase-hooks/auth';
-import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, orderBy } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, updateDoc, deleteDoc, doc, orderBy, setDoc, getDoc } from 'firebase/firestore';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import { Switch } from '@/components/ui/switch';
 import { auth, db, signInWithGoogle, logout, requestNotificationPermission, getMessagingInstance } from './firebase';
 import { onMessage } from 'firebase/messaging';
 import {
@@ -66,6 +67,8 @@ type SortConfig = {
 const DEFAULT_SETTINGS: Settings = {
   nearDays: 7,
   veryNearDays: 3,
+  enableEmailNotifications: false,
+  hasDismissedPromo: false,
 };
 
 export default function App() {
@@ -86,9 +89,16 @@ export default function App() {
     location: '',
   });
   const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [permissionStatus, setPermissionStatus] = useState<NotificationPermission | 'unsupported'>('default');
 
   // Handle Push Notifications
   useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      setPermissionStatus(Notification.permission);
+    } else {
+      setPermissionStatus('unsupported');
+    }
+
     if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
       navigator.serviceWorker.register('/firebase-messaging-sw.js')
         .then((registration) => {
@@ -104,8 +114,8 @@ export default function App() {
         const msg = await getMessagingInstance();
         if (!msg) return;
 
-        // We only auto-request if they haven't denied it
-        if (Notification.permission === 'default' || Notification.permission === 'granted') {
+        // We only auto-request if it's already granted
+        if (Notification.permission === 'granted') {
           const token = await requestNotificationPermission();
           if (token) {
             await saveTokenToBackend(token, user.uid);
@@ -153,8 +163,10 @@ export default function App() {
     const token = await requestNotificationPermission();
     if (token) {
       await saveTokenToBackend(token, user.uid);
+      setPermissionStatus('granted');
       toast.success('Push notifications enabled!');
     } else {
+      setPermissionStatus(Notification.permission);
       toast.error('Permission denied or failed to enable notifications');
     }
   };
@@ -175,6 +187,26 @@ export default function App() {
       }
     } catch (error) {
       console.error('Test notification failed:', error);
+      toast.error('Failed to connect to server');
+    }
+  };
+
+  const handleTestEmail = async () => {
+    if (!user || !user.email) return;
+    try {
+      const res = await fetch('/api/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: user.uid, email: user.email })
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success('Test email sent! Please check your inbox.');
+      } else {
+        toast.error(data.error || 'Failed to send test email');
+      }
+    } catch (error) {
+      console.error('Test email failed:', error);
       toast.error('Failed to connect to server');
     }
   };
@@ -206,8 +238,9 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
-  // Load settings from localStorage
+  // Load and sync settings
   useEffect(() => {
+    // Load from localStorage first for immediate UI feedback
     const savedSettings = localStorage.getItem('porting_pro_settings');
     if (savedSettings) {
       try {
@@ -216,11 +249,54 @@ export default function App() {
         console.error('Failed to parse settings', e);
       }
     }
-  }, []);
 
-  useEffect(() => {
-    localStorage.setItem('porting_pro_settings', JSON.stringify(settings));
-  }, [settings]);
+    if (!user) return;
+
+    // Load from Firestore for logged in users
+    const loadSettings = async () => {
+      try {
+        const settingsRef = doc(db, 'settings', user.uid);
+        const settingsSnap = await getDoc(settingsRef);
+        
+        if (settingsSnap.exists()) {
+          const cloudSettings = settingsSnap.data() as Settings;
+          setSettings(cloudSettings);
+          // Sync back to local storage
+          localStorage.setItem('porting_pro_settings', JSON.stringify(cloudSettings));
+        } else {
+          // New user, initialize cloud settings with defaults plus email
+          const initialSettings = { 
+            ...DEFAULT_SETTINGS, 
+            userEmail: user.email || undefined,
+            updatedAt: new Date().toISOString()
+          };
+          await setDoc(settingsRef, initialSettings);
+          setSettings(initialSettings as Settings);
+        }
+      } catch (error) {
+        console.error("Error loading settings from cloud:", error);
+      }
+    };
+
+    loadSettings();
+  }, [user]);
+
+  // Persist settings locally and to cloud
+  const persistSettings = async (newSettings: Settings) => {
+    localStorage.setItem('porting_pro_settings', JSON.stringify(newSettings));
+    if (user) {
+      try {
+        const settingsRef = doc(db, 'settings', user.uid);
+        await setDoc(settingsRef, {
+          ...newSettings,
+          userEmail: user.email || newSettings.userEmail,
+          updatedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error persisting settings to cloud:", error);
+      }
+    }
+  };
 
   // Check for notifications on load and periodic intervals
   useEffect(() => {
@@ -302,10 +378,11 @@ export default function App() {
     }
   };
 
-  const handleUpdateSettings = (e: React.FormEvent) => {
+  const handleUpdateSettings = async (e: React.FormEvent) => {
     e.preventDefault();
+    await persistSettings(settings);
     setIsSettingsDialogOpen(false);
-    toast.success('Settings updated');
+    toast.success('Settings updated and synced to cloud');
   };
 
   const confirmDelete = (id: string) => {
@@ -406,6 +483,102 @@ export default function App() {
           </div>
         ) : (
           <>
+            {/* Notification Setup Dialog */}
+            <Dialog 
+              open={!!user && permissionStatus === 'default' && !settings.hasDismissedPromo} 
+              onOpenChange={(open) => {
+                if (!open) {
+                  const newSettings = { ...settings, hasDismissedPromo: true };
+                  setSettings(newSettings);
+                  persistSettings(newSettings);
+                }
+              }}
+            >
+              <DialogContent className="sm:max-w-[425px] rounded-none border-2 border-primary/20 shadow-2xl">
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-3 text-xl font-black uppercase tracking-tighter">
+                    <div className="bg-primary p-2 rounded-lg text-primary-foreground">
+                      <Bell className="w-5 h-5" />
+                    </div>
+                    Stay Updated
+                  </DialogTitle>
+                  <DialogDescription className="text-xs font-medium leading-relaxed pt-2">
+                    Configure your eligibility alerts. Enabling push notifications ensures you never miss a porting date, even when the app is closed.
+                  </DialogDescription>
+                </DialogHeader>
+
+                <div className="space-y-6 py-4">
+                  <div className="space-y-4">
+                    <div className="space-y-3">
+                      <Label className="font-bold text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-2 block">Threshold Monitoring</Label>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-1.5">
+                          <Label htmlFor="setup-near-days" className="text-[9px] uppercase font-black text-muted-foreground/70">Warning (Days)</Label>
+                          <Input
+                            id="setup-near-days"
+                            type="number"
+                            min="1"
+                            max="30"
+                            className="font-mono h-10 text-xs rounded-none border-foreground/10 focus-visible:ring-primary"
+                            value={settings.nearDays}
+                            onChange={e => setSettings({ ...settings, nearDays: parseInt(e.target.value) || 7 })}
+                          />
+                        </div>
+                        <div className="space-y-1.5">
+                          <Label htmlFor="setup-very-near-days" className="text-[9px] uppercase font-black text-muted-foreground/70">Urgent (Days)</Label>
+                          <Input
+                            id="setup-very-near-days"
+                            type="number"
+                            min="1"
+                            max="14"
+                            className="font-mono h-10 text-xs rounded-none border-foreground/10 focus-visible:ring-primary"
+                            value={settings.veryNearDays}
+                            onChange={e => setSettings({ ...settings, veryNearDays: parseInt(e.target.value) || 3 })}
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 pt-2 border-t border-foreground/5">
+                      <Label className="font-bold text-[10px] uppercase tracking-[0.2em] text-muted-foreground mb-2 block">Communication Channels</Label>
+                      <div className="flex items-center justify-between p-4 border border-foreground/10 rounded-none bg-muted/30">
+                        <div className="space-y-0.5">
+                          <p className="text-[10px] font-black uppercase tracking-wider">Email Intel</p>
+                          <p className="text-[9px] text-muted-foreground font-medium leading-tight max-w-[120px]">Get daily eligibility reports via email.</p>
+                        </div>
+                        <Switch 
+                          checked={settings.enableEmailNotifications}
+                          onCheckedChange={checked => setSettings({ ...settings, enableEmailNotifications: checked })}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <DialogFooter className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-foreground/5">
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    onClick={() => {
+                      const newSettings = { ...settings, hasDismissedPromo: true };
+                      setSettings(newSettings);
+                      persistSettings(newSettings);
+                    }}
+                    className="w-full sm:w-auto h-11 text-[10px] font-black uppercase tracking-[0.2em] rounded-none hover:bg-muted"
+                  >
+                    Maybe Later
+                  </Button>
+                  <Button 
+                    size="sm" 
+                    onClick={handleEnableNotifications}
+                    className="w-full sm:flex-1 h-11 px-6 bg-primary text-primary-foreground font-bold uppercase text-[10px] tracking-[0.2em] rounded-none shadow-[0_4px_14px_0_rgba(0,0,0,0.3)] hover:shadow-primary/20 transition-all active:scale-95"
+                  >
+                    Enable Push Notifications
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
             {/* Header */}
             <header className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-1">
@@ -523,6 +696,30 @@ export default function App() {
                         className="w-full h-8 text-[9px] font-black uppercase tracking-widest rounded-none border border-dashed border-foreground/10 hover:bg-muted"
                       >
                         Send Test Notification
+                      </Button>
+                    </div>
+                    
+                    <div className="space-y-4 pt-2 border-t border-foreground/5">
+                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Email Intelligence</Label>
+                      <div className="flex items-center justify-between p-3 border border-foreground/10 rounded-none bg-muted/30">
+                        <div className="space-y-0.5">
+                          <p className="text-[10px] font-black uppercase tracking-wider">Email Notifications</p>
+                          <p className="text-[9px] text-muted-foreground font-medium">Receive eligibility reports via email.</p>
+                        </div>
+                        <Switch 
+                          checked={settings.enableEmailNotifications}
+                          onCheckedChange={checked => setSettings({ ...settings, enableEmailNotifications: checked })}
+                        />
+                      </div>
+                      <Button 
+                        type="button"
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleTestEmail}
+                        disabled={!settings.enableEmailNotifications}
+                        className="w-full h-8 text-[9px] font-black uppercase tracking-widest rounded-none border border-dashed border-foreground/10 hover:bg-muted disabled:opacity-30"
+                      >
+                        Send Test Email
                       </Button>
                     </div>
                   </div>

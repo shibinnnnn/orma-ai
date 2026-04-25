@@ -17,4 +17,8 @@ export interface PortingStatus {
 export interface Settings {
   nearDays: number;
   veryNearDays: number;
+  enableEmailNotifications: boolean;
+  hasDismissedPromo: boolean;
+  userEmail?: string;
+  updatedAt?: string;
 }

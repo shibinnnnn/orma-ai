@@ -55,6 +55,17 @@ service cloud.firestore {
              data.userId == request.auth.uid;
     }
 
+    function isValidSettings(data) {
+      return data.keys().hasAll(['nearDays', 'veryNearDays', 'enableEmailNotifications', 'hasDismissedPromo']) &&
+             data.keys().hasOnly(['nearDays', 'veryNearDays', 'enableEmailNotifications', 'hasDismissedPromo', 'userEmail', 'updatedAt']) &&
+             data.nearDays is int && data.nearDays >= 1 && data.nearDays <= 30 &&
+             data.veryNearDays is int && data.veryNearDays >= 1 && data.veryNearDays <= 14 &&
+             data.enableEmailNotifications is bool &&
+             data.hasDismissedPromo is bool &&
+             (!('userEmail' in data) || isValidEmail(data.userEmail)) &&
+             (!('updatedAt' in data) || isValidDateString(data.updatedAt));
+    }
+
     match /customers/{customerId} {
       allow read: if isOwner(resource.data.userId);
       allow create: if isAuthenticated() && isValidCustomer(request.resource.data);
@@ -63,6 +74,11 @@ service cloud.firestore {
                       request.resource.data.userId == resource.data.userId &&
                       request.resource.data.id == resource.data.id;
       allow delete: if isOwner(resource.data.userId);
+    }
+
+    match /settings/{userId} {
+      allow read: if isOwner(userId);
+      allow write: if isOwner(userId) && isValidSettings(request.resource.data);
     }
 
     match /fcm_tokens/{userId} {
