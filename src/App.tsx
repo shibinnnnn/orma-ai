@@ -59,6 +59,43 @@ import { Separator } from '@/components/ui/separator';
 import { Customer, Settings } from './types';
 import { calculatePortingDate, getPortingStatus, formatDate } from './lib/date-utils';
 
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error details: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
 type SortConfig = {
   key: 'name' | 'addedAt' | 'portingDate';
   direction: 'asc' | 'desc';
@@ -224,6 +261,7 @@ export default function App() {
       orderBy('addedAt', 'desc')
     );
 
+    const customersPath = 'customers';
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const docs = snapshot.docs.map(doc => ({
         ...doc.data(),
@@ -231,7 +269,7 @@ export default function App() {
       })) as Customer[];
       setCustomers(docs);
     }, (error) => {
-      console.error("Firestore Error:", error);
+      handleFirestoreError(error, OperationType.LIST, customersPath);
       toast.error("Failed to sync with cloud database");
     });
 
@@ -254,6 +292,7 @@ export default function App() {
 
     // Load from Firestore for logged in users
     const loadSettings = async () => {
+      const settingsPath = `settings/${user.uid}`;
       try {
         const settingsRef = doc(db, 'settings', user.uid);
         const settingsSnap = await getDoc(settingsRef);
@@ -265,16 +304,26 @@ export default function App() {
           localStorage.setItem('porting_pro_settings', JSON.stringify(cloudSettings));
         } else {
           // New user, initialize cloud settings with defaults plus email
+          console.log("Initializing settings for new user...");
           const initialSettings = { 
             ...DEFAULT_SETTINGS, 
             userEmail: user.email || undefined,
             updatedAt: new Date().toISOString()
           };
-          await setDoc(settingsRef, initialSettings);
-          setSettings(initialSettings as Settings);
+          try {
+            await setDoc(settingsRef, initialSettings);
+            setSettings(initialSettings as Settings);
+          } catch (writeErr) {
+            handleFirestoreError(writeErr, OperationType.WRITE, settingsPath);
+          }
         }
       } catch (error) {
-        console.error("Error loading settings from cloud:", error);
+        // Only handle if it hasn't been re-thrown by handleFirestoreError inside the else block
+        if (error instanceof Error && error.message.startsWith('{')) {
+          console.error("Cloud Settings Error:", error.message);
+          return;
+        }
+        handleFirestoreError(error, OperationType.GET, settingsPath);
       }
     };
 
@@ -285,6 +334,7 @@ export default function App() {
   const persistSettings = async (newSettings: Settings) => {
     localStorage.setItem('porting_pro_settings', JSON.stringify(newSettings));
     if (user) {
+      const settingsPath = `settings/${user.uid}`;
       try {
         const settingsRef = doc(db, 'settings', user.uid);
         await setDoc(settingsRef, {
@@ -293,7 +343,7 @@ export default function App() {
           updatedAt: new Date().toISOString()
         }, { merge: true });
       } catch (error) {
-        console.error("Error persisting settings to cloud:", error);
+        handleFirestoreError(error, OperationType.WRITE, settingsPath);
       }
     }
   };
@@ -336,8 +386,9 @@ export default function App() {
     const addedAt = new Date().toISOString();
     const portingDate = calculatePortingDate(addedAt);
 
+    const customersPath = 'customers';
     try {
-      await addDoc(collection(db, 'customers'), {
+      await addDoc(collection(db, customersPath), {
         ...newCustomer,
         addedAt,
         portingDate,
@@ -349,8 +400,7 @@ export default function App() {
       setIsAddDialogOpen(false);
       toast.success('Customer added to cloud');
     } catch (error) {
-      console.error("Add Error:", error);
-      toast.error("Failed to save customer");
+      handleFirestoreError(error, OperationType.CREATE, customersPath);
     }
   };
 
@@ -361,6 +411,7 @@ export default function App() {
       return;
     }
 
+    const customerPath = `customers/${editingCustomer.id}`;
     try {
       const customerRef = doc(db, 'customers', editingCustomer.id);
       await updateDoc(customerRef, {
@@ -373,8 +424,7 @@ export default function App() {
       setEditingCustomer(null);
       toast.success('Customer updated in cloud');
     } catch (error) {
-      console.error("Update Error:", error);
-      toast.error("Failed to update customer");
+      handleFirestoreError(error, OperationType.UPDATE, customerPath);
     }
   };
 
@@ -392,14 +442,14 @@ export default function App() {
 
   const handleDeleteCustomer = async () => {
     if (customerToDelete) {
+      const customerPath = `customers/${customerToDelete}`;
       try {
         await deleteDoc(doc(db, 'customers', customerToDelete));
         setIsDeleteDialogOpen(false);
         setCustomerToDelete(null);
         toast.info('Customer removed from cloud');
       } catch (error) {
-        console.error("Delete Error:", error);
-        toast.error("Failed to delete customer");
+        handleFirestoreError(error, OperationType.DELETE, customerPath);
       }
     }
   };

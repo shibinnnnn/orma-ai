@@ -27,6 +27,10 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
@@ -55,9 +59,17 @@ service cloud.firestore {
              data.userId == request.auth.uid;
     }
 
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
     function isValidSettings(data) {
       return data.keys().hasAll(['nearDays', 'veryNearDays', 'enableEmailNotifications', 'hasDismissedPromo']) &&
-             data.keys().hasOnly(['nearDays', 'veryNearDays', 'enableEmailNotifications', 'hasDismissedPromo', 'userEmail', 'updatedAt']) &&
+             (
+               (data.keys().size() == 4) ||
+               (data.keys().size() == 5 && (data.keys().hasAll(['userEmail']) || data.keys().hasAll(['updatedAt']))) ||
+               (data.keys().size() == 6 && data.keys().hasAll(['userEmail', 'updatedAt']))
+             ) &&
              data.nearDays is int && data.nearDays >= 1 && data.nearDays <= 30 &&
              data.veryNearDays is int && data.veryNearDays >= 1 && data.veryNearDays <= 14 &&
              data.enableEmailNotifications is bool &&
@@ -77,8 +89,7 @@ service cloud.firestore {
     }
 
     match /settings/{userId} {
-      allow read: if isOwner(userId);
-      allow write: if isOwner(userId) && isValidSettings(request.resource.data);
+      allow read, write: if isOwner(userId);
     }
 
     match /fcm_tokens/{userId} {
