@@ -239,19 +239,20 @@ export default function App() {
   };
 
   const handleSendOtp = async () => {
-    console.log('Attempting to send OTP to:', phoneNumber);
-    if (!phoneNumber) return toast.error('Enter phone number');
+    const phone = phoneNumber.trim();
+    console.log('Attempting to send OTP to:', phone);
+    if (!phone) return toast.error('Enter phone number');
     setIsLoggingIn(true);
     try {
       const res = await fetch('/api/auth/phone/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phoneNumber }),
+        body: JSON.stringify({ phone }),
       });
       if (res.ok) {
         setOtpSent(true);
         const data = await res.json();
-        toast.success(`OTP sent! (Demo OTP: ${data.otp || 'Check server logs'})`);
+        toast.success(`OTP sent! (Demo OTP: ${data.otp})`);
       } else {
         const data = await res.json().catch(() => ({ error: 'Unknown server error' }));
         console.error('Phone auth error:', data);
@@ -266,13 +267,15 @@ export default function App() {
   };
 
   const handleVerifyOtp = async () => {
-    if (!otp) return toast.error('Enter OTP');
+    const phone = phoneNumber.trim();
+    const cleanOtp = otp.trim();
+    if (!cleanOtp) return toast.error('Enter OTP');
     setIsLoggingIn(true);
     try {
       const res = await fetch('/api/auth/phone/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: phoneNumber, otp }),
+        body: JSON.stringify({ phone, otp: cleanOtp }),
       });
       const data = await res.json();
       if (data.user) {

@@ -96,18 +96,21 @@ async function startServer() {
 
   app.post("/api/auth/phone/send", async (req: any, res) => {
     try {
-      console.log("POST /api/auth/phone/send", req.body);
-      const { phone } = req.body;
+      const { phone: rawPhone } = req.body;
+      const phone = rawPhone?.trim();
+      
+      console.log("POST /api/auth/phone/send", { phone });
+      
       if (!phone) {
-        console.warn("Phone number missing in request body");
+        console.warn("Phone number missing or empty");
         return res.status(400).json({ error: "Phone number required" });
       }
       
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       otpStore.set(phone, { otp, expires: Date.now() + 5 * 60 * 1000 });
       
-      console.log(`[SMS AUTH] Phone: ${phone}, OTP: ${otp}`);
-      res.json({ success: true, otp, message: "OTP sent (check server logs for demo)" });
+      console.log(`[AUTH] OTP for ${phone} is ${otp}`);
+      res.json({ success: true, otp, message: "OTP sent" });
     } catch (error) {
       console.error("Error in phone/send:", error);
       res.status(500).json({ error: "Internal server error" });
@@ -115,29 +118,44 @@ async function startServer() {
   });
 
   app.post("/api/auth/phone/verify", (req: any, res) => {
-    const { phone, otp } = req.body;
-    if (!phone || !otp) return res.status(400).json({ error: "Phone and OTP required" });
-    
-    const stored = otpStore.get(phone);
-    if (!stored || stored.otp !== otp || Date.now() > stored.expires) {
-      return res.status(401).json({ error: "Invalid or expired OTP" });
+    try {
+      const { phone: rawPhone, otp: rawOtp } = req.body;
+      const phone = rawPhone?.trim();
+      const otp = rawOtp?.trim();
+
+      console.log("POST /api/auth/phone/verify", { phone, otp });
+
+      if (!phone || !otp) {
+        return res.status(400).json({ error: "Phone and OTP required" });
+      }
+      
+      const stored = otpStore.get(phone);
+      console.log("Stored OTP state:", stored ? { matches: stored.otp === otp, expired: Date.now() > stored.expires } : "Not found");
+
+      if (!stored || stored.otp !== otp || Date.now() > stored.expires) {
+        return res.status(401).json({ error: "Invalid or expired OTP" });
+      }
+      
+      otpStore.delete(phone);
+      
+      const userId = `phone_${phone}`;
+      req.session!.userId = userId;
+      req.session!.phone = phone;
+      req.session!.name = `User ${phone.slice(-4)}`;
+      
+      console.log("Verification successful, session created for:", userId);
+
+      res.json({ 
+        user: { 
+          id: userId, 
+          phone: phone, 
+          name: `User ${phone.slice(-4)}` 
+        } 
+      });
+    } catch (error) {
+      console.error("Error in phone/verify:", error);
+      res.status(500).json({ error: "Internal server error" });
     }
-    
-    otpStore.delete(phone);
-    
-    // Create session
-    const userId = `phone_${phone}`;
-    req.session!.userId = userId;
-    req.session!.phone = phone;
-    req.session!.name = `User ${phone.slice(-4)}`;
-    
-    res.json({ 
-      user: { 
-        id: userId, 
-        phone: phone, 
-        name: `User ${phone.slice(-4)}` 
-      } 
-    });
   });
 
   app.get("/api/auth/me", (req: any, res) => {
