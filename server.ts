@@ -41,9 +41,9 @@ async function startServer() {
     console.log(`Sending test email to ${email}`);
     try {
       await resend.emails.send({
-        from: "Orma AI <notifications@ais.studio>",
+        from: "Orm.AI <notifications@ais.studio>",
         to: email,
-        subject: "Test Email from Orma AI",
+        subject: "Test Email from Orm.AI",
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #eee; padding: 20px; border-radius: 8px;">
             <h2 style="color: #3b82f6; margin-top: 0;">Email Alerts Alert</h2>

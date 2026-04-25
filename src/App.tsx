@@ -5,7 +5,7 @@
 
 import * as React from 'react';
 import { useState, useEffect, useMemo } from 'react';
-import { Plus, Search, MapPin, Phone, User, Calendar, Bell, Trash2, AlertCircle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon } from 'lucide-react';
+import { Plus, Search, MapPin, Phone, User, Calendar, Bell, Trash2, AlertCircle, AlertTriangle, CheckCircle2, Clock, Edit2, ArrowUpDown, ArrowUp, ArrowDown, Settings as SettingsIcon, Sun, Moon } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { useTheme } from 'next-themes';
@@ -85,7 +85,7 @@ export default function App() {
     if (typeof window !== 'undefined') {
       try {
         const saved = localStorage.getItem('orma_settings');
-        return saved ? JSON.parse(saved) : DEFAULT_SETTINGS;
+        return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : DEFAULT_SETTINGS;
       } catch (e) {
         console.error('Failed to parse settings', e);
         return DEFAULT_SETTINGS;
@@ -151,7 +151,7 @@ export default function App() {
 
   const handleTestNotification = async () => {
     if (Notification.permission === 'granted') {
-      new Notification('Orma AI', {
+      new Notification('Orm.AI', {
         body: 'Local test notification successful!',
         icon: '/favicon.ico'
       });
@@ -237,6 +237,8 @@ export default function App() {
       id: crypto.randomUUID(),
       addedAt,
       portingDate,
+      portingDateMode: newCustomer.portingDateMode,
+      portingDaysOffset: newCustomer.portingDaysOffset,
     };
 
     persistCustomers([customer, ...customers]);
@@ -294,7 +296,11 @@ export default function App() {
   };
 
   const openEditDialog = (customer: Customer) => {
-    setEditingCustomer({ ...customer });
+    setEditingCustomer({ 
+      ...customer,
+      portingDateMode: customer.portingDateMode || 'auto',
+      portingDaysOffset: customer.portingDaysOffset || '90'
+    });
     setIsEditDialogOpen(true);
   };
 
@@ -351,7 +357,6 @@ export default function App() {
               onOpenChange={(open) => {
                 if (!open) {
                   const newSettings = { ...settings, hasDismissedPromo: true };
-                  setSettings(newSettings);
                   persistSettings(newSettings);
                 }
               }}
@@ -423,7 +428,6 @@ export default function App() {
                     size="sm" 
                     onClick={() => {
                       const newSettings = { ...settings, hasDismissedPromo: true };
-                      setSettings(newSettings);
                       persistSettings(newSettings);
                     }}
                     className="w-full sm:w-auto h-11 text-[10px] font-black uppercase tracking-[0.2em] rounded-none hover:bg-muted"
@@ -448,7 +452,7 @@ export default function App() {
               <div className="bg-primary p-2 rounded-lg text-primary-foreground shadow-none">
                 <Bell className="w-8 h-8" />
               </div>
-              Orma AI
+              Orm.AI
             </h1>
             <p className="text-muted-foreground font-medium tracking-wide uppercase text-xs">Remember everyone</p>
           </div>
@@ -756,19 +760,121 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="space-y-2 pt-2 border-t border-foreground/5">
-                    <Label htmlFor="edit-date" className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Porting Date</Label>
-                    <div className="relative">
-                      <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
-                      <Input
-                        id="edit-date"
-                        type="date"
-                        className="pl-10 font-mono"
-                        value={editingCustomer.portingDate.split('T')[0]}
-                        onChange={e => setEditingCustomer({ ...editingCustomer, portingDate: new Date(e.target.value).toISOString() })}
-                      />
+                  <div className="space-y-4 pt-4 border-t border-foreground/5">
+                    <div className="space-y-3">
+                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Activation Date</Label>
+                      <div className="relative">
+                        <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                        <Input
+                          id="edit-added-at"
+                          type="date"
+                          className="pl-10 font-mono"
+                          value={editingCustomer.addedAt.split('T')[0]}
+                          onChange={e => {
+                            const newAddedAt = new Date(e.target.value).toISOString();
+                            let newPortingDate = editingCustomer.portingDate;
+                            
+                            // Re-calculate if in auto or days mode
+                            if (editingCustomer.portingDateMode === 'auto') {
+                              const date = new Date(newAddedAt);
+                              date.setDate(date.getDate() + 90);
+                              newPortingDate = date.toISOString();
+                            } else if (editingCustomer.portingDateMode === 'days') {
+                              const days = parseInt(editingCustomer.portingDaysOffset || '90') || 0;
+                              const date = new Date(newAddedAt);
+                              date.setDate(date.getDate() + days);
+                              newPortingDate = date.toISOString();
+                            }
+                            
+                            setEditingCustomer({ 
+                              ...editingCustomer, 
+                              addedAt: newAddedAt,
+                              portingDate: newPortingDate
+                            });
+                          }}
+                        />
+                      </div>
+                      <p className="text-[10px] text-muted-foreground font-medium">The date the SIM/Service was activated.</p>
                     </div>
-                    <p className="text-[10px] text-muted-foreground font-medium">Update the customer's eligibility date manually.</p>
+                  </div>
+
+                  <div className="space-y-4 pt-4 border-t border-foreground/5">
+                    <div className="space-y-3">
+                      <Label className="font-bold text-xs uppercase tracking-widest text-muted-foreground">Porting Eligibility Date</Label>
+                      <div className="flex gap-2 p-1 bg-muted/30 border border-foreground/10 rounded-none">
+                        <Button
+                          type="button"
+                          variant={editingCustomer.portingDateMode === 'auto' ? 'default' : 'ghost'}
+                          size="sm"
+                          className="flex-1 text-[10px] uppercase font-black tracking-widest h-8 rounded-none"
+                          onClick={() => {
+                            const date = new Date(editingCustomer.addedAt);
+                            date.setDate(date.getDate() + 90);
+                            setEditingCustomer({ ...editingCustomer, portingDateMode: 'auto', portingDate: date.toISOString() });
+                          }}
+                        >
+                          Auto (90d)
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={editingCustomer.portingDateMode === 'days' ? 'default' : 'ghost'}
+                          size="sm"
+                          className="flex-1 text-[10px] uppercase font-black tracking-widest h-8 rounded-none"
+                          onClick={() => setEditingCustomer({ ...editingCustomer, portingDateMode: 'days' })}
+                        >
+                          Days
+                        </Button>
+                        <Button
+                          type="button"
+                          variant={editingCustomer.portingDateMode === 'manual' ? 'default' : 'ghost'}
+                          size="sm"
+                          className="flex-1 text-[10px] uppercase font-black tracking-widest h-8 rounded-none"
+                          onClick={() => setEditingCustomer({ ...editingCustomer, portingDateMode: 'manual' })}
+                        >
+                          Manual
+                        </Button>
+                      </div>
+
+                      {editingCustomer.portingDateMode === 'days' && (
+                        <div className="space-y-2 pt-2 animate-in slide-in-from-top-2 duration-200">
+                          <Label htmlFor="edit-porting-days" className="text-[10px] font-bold text-muted-foreground uppercase">Number of Days from Activation</Label>
+                          <Input
+                            id="edit-porting-days"
+                            type="number"
+                            placeholder="e.g. 30"
+                            className="font-mono"
+                            value={editingCustomer.portingDaysOffset || '90'}
+                            onChange={e => {
+                              const days = parseInt(e.target.value) || 0;
+                              const date = new Date(editingCustomer.addedAt);
+                              date.setDate(date.getDate() + days);
+                              setEditingCustomer({ ...editingCustomer, portingDaysOffset: e.target.value, portingDate: date.toISOString() });
+                            }}
+                          />
+                        </div>
+                      )}
+
+                      {editingCustomer.portingDateMode === 'manual' && (
+                        <div className="space-y-2 pt-2 animate-in slide-in-from-top-2 duration-200">
+                          <Label htmlFor="edit-porting-date" className="text-[10px] font-bold text-muted-foreground uppercase">Pick Custom Date</Label>
+                          <div className="relative">
+                            <Calendar className="absolute left-3 top-3 w-4 h-4 text-muted-foreground opacity-50" />
+                            <Input
+                              id="edit-porting-date"
+                              type="date"
+                              className="pl-10 font-mono"
+                              value={editingCustomer.portingDate.split('T')[0]}
+                              onChange={e => setEditingCustomer({ ...editingCustomer, portingDate: new Date(e.target.value).toISOString() })}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="p-3 bg-primary/5 border border-primary/10 rounded-none mt-4">
+                        <p className="text-[10px] text-muted-foreground uppercase font-bold tracking-wider">Estimated Eligibility</p>
+                        <p className="text-sm font-black text-primary font-mono">{formatDate(editingCustomer.portingDate)}</p>
+                      </div>
+                    </div>
                   </div>
                   <DialogFooter>
                     <Button type="submit" className="w-full">Update Details</Button>
@@ -885,7 +991,7 @@ export default function App() {
                       </TableRow>
                     ) : (
                       filteredCustomers.map((customer) => {
-                        const status = getPortingStatus(customer.portingDate, settings.nearDays, settings.veryNearDays);
+                        const status = getPortingStatus(customer.addedAt, customer.portingDate, settings.nearDays, settings.veryNearDays);
                         return (
                           <motion.tr
                             key={customer.id}
@@ -929,23 +1035,41 @@ export default function App() {
                               </div>
                             </TableCell>
                             <TableCell>
-                              {status.isEligible ? (
-                                <Badge className="bg-emerald-100 text-emerald-700 hover:bg-emerald-100 border-emerald-200">
-                                  Eligible Now
-                                </Badge>
-                              ) : status.isVeryNear ? (
-                                <Badge variant="destructive" className="animate-pulse">
-                                  {status.daysRemaining} Days Left
-                                </Badge>
-                              ) : status.isNear ? (
-                                <Badge className="bg-amber-100 text-amber-700 hover:bg-amber-100 border-amber-200">
-                                  {status.daysRemaining} Days Left
-                                </Badge>
-                              ) : (
-                                <Badge variant="secondary" className="font-normal">
-                                  {status.daysRemaining} Days
-                                </Badge>
-                              )}
+                              <div className="flex flex-col gap-2">
+                                {status.isEligible ? (
+                                  <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-50 border-emerald-200/50 flex items-center gap-1.5 w-fit">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    Eligible Now
+                                  </Badge>
+                                ) : status.isVeryNear ? (
+                                  <Badge variant="destructive" className="animate-pulse flex items-center gap-1.5 w-fit">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {status.daysRemaining} Days Left
+                                  </Badge>
+                                ) : status.isNear ? (
+                                  <Badge className="bg-amber-50 text-amber-700 hover:bg-amber-50 border-amber-200/50 flex items-center gap-1.5 w-fit">
+                                    <Clock className="w-3 h-3" />
+                                    {status.daysRemaining} Days Left
+                                  </Badge>
+                                ) : (
+                                  <Badge variant="secondary" className="font-normal flex items-center gap-1.5 w-fit opacity-70">
+                                    <Calendar className="w-3 h-3" />
+                                    {status.daysRemaining} Days
+                                  </Badge>
+                                )}
+                                
+                                {/* Progress mini-bar */}
+                                {!status.isEligible && (
+                                  <div className="w-full h-1 bg-muted/50 rounded-full overflow-hidden max-w-[100px]">
+                                    <div 
+                                      className={`h-full transition-all duration-500 ${
+                                        status.isVeryNear ? 'bg-destructive' : status.isNear ? 'bg-amber-500' : 'bg-primary/40'
+                                      }`}
+                                      style={{ width: `${status.progress * 100}%` }}
+                                    />
+                                  </div>
+                                )}
+                              </div>
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -985,7 +1109,7 @@ export default function App() {
                   </div>
                 ) : (
                   filteredCustomers.map((customer) => {
-                    const status = getPortingStatus(customer.portingDate, settings.nearDays, settings.veryNearDays);
+                    const status = getPortingStatus(customer.addedAt, customer.portingDate, settings.nearDays, settings.veryNearDays);
                     return (
                       <motion.div
                         key={customer.id}
@@ -1016,23 +1140,39 @@ export default function App() {
                             </div>
                           </div>
                           {status.isEligible ? (
-                            <Badge className="bg-foreground text-background hover:bg-foreground border-none font-black uppercase text-[9px] tracking-widest rounded-none">
+                            <Badge className="bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border-none font-black uppercase text-[9px] tracking-widest rounded-none flex items-center gap-1">
+                              <CheckCircle2 className="w-2.5 h-2.5" />
                               Eligible
                             </Badge>
                           ) : status.isVeryNear ? (
-                            <Badge variant="destructive" className="animate-pulse font-black uppercase text-[9px] tracking-widest rounded-none">
+                            <Badge variant="destructive" className="animate-pulse font-black uppercase text-[9px] tracking-widest rounded-none flex items-center gap-1">
+                              <AlertTriangle className="w-2.5 h-2.5" />
                               {status.daysRemaining}d Left
                             </Badge>
                           ) : status.isNear ? (
-                            <Badge className="bg-foreground/10 text-foreground hover:bg-foreground/20 border-none font-black uppercase text-[9px] tracking-widest rounded-none">
+                            <Badge className="bg-amber-50 text-amber-700 hover:bg-foreground/20 border-none font-black uppercase text-[9px] tracking-widest rounded-none flex items-center gap-1">
+                              <Clock className="w-2.5 h-2.5" />
                               {status.daysRemaining}d Left
                             </Badge>
                           ) : (
-                            <Badge variant="outline" className="font-black uppercase text-[9px] tracking-widest rounded-none border-foreground/10">
+                            <Badge variant="outline" className="font-black uppercase text-[9px] tracking-widest rounded-none border-foreground/10 flex items-center gap-1">
+                              <Calendar className="w-2.5 h-2.5 opacity-50" />
                               {status.daysRemaining}d
                             </Badge>
                           )}
                         </div>
+
+                        {/* Progress Bar for Mobile */}
+                        {!status.isEligible && (
+                          <div className="w-full h-1 bg-muted/50 rounded-full overflow-hidden">
+                            <div 
+                              className={`h-full transition-all duration-500 ${
+                                status.isVeryNear ? 'bg-destructive' : status.isNear ? 'bg-amber-500' : 'bg-primary'
+                              }`}
+                              style={{ width: `${status.progress * 100}%` }}
+                            />
+                          </div>
+                        )}
 
                         <div className="grid grid-cols-2 gap-4 text-xs">
                           <div className="space-y-1">

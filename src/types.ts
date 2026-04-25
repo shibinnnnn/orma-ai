@@ -5,6 +5,8 @@ export interface Customer {
   location: string;
   addedAt: string; // ISO string
   portingDate: string; // ISO string (addedAt + 90 days)
+  portingDateMode?: 'auto' | 'manual' | 'days';
+  portingDaysOffset?: string;
 }
 
 export interface PortingStatus {
@@ -12,6 +14,7 @@ export interface PortingStatus {
   isEligible: boolean;
   isNear: boolean;
   isVeryNear: boolean;
+  progress: number; // 0 to 1
 }
 
 export interface Settings {
