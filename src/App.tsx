@@ -162,7 +162,9 @@ export default function App() {
             client_id: clientId,
             callback: handleCallback,
             auto_select: false,
-            use_fedcm_for_prompt: false
+            use_fedcm_for_prompt: false,
+            itp_support: false,
+            ux_mode: 'popup'
           });
           const btn = document.getElementById('google-signin-button');
           if (btn) {
@@ -237,6 +239,7 @@ export default function App() {
   };
 
   const handleSendOtp = async () => {
+    console.log('Attempting to send OTP to:', phoneNumber);
     if (!phoneNumber) return toast.error('Enter phone number');
     setIsLoggingIn(true);
     try {
@@ -247,12 +250,16 @@ export default function App() {
       });
       if (res.ok) {
         setOtpSent(true);
-        toast.success('OTP sent! Check server logs.');
+        const data = await res.json();
+        toast.success(`OTP sent! (Demo OTP: ${data.otp || 'Check server logs'})`);
       } else {
-        toast.error('Failed to send OTP');
+        const data = await res.json().catch(() => ({ error: 'Unknown server error' }));
+        console.error('Phone auth error:', data);
+        toast.error(data.error || `Failed to send OTP (${res.status})`);
       }
     } catch (e) {
-      toast.error('Failed to send OTP');
+      console.error('Fetch error:', e);
+      toast.error('Failed to send OTP - check connection');
     } finally {
       setIsLoggingIn(false);
     }

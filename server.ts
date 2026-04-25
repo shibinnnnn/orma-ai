@@ -57,6 +57,9 @@ async function startServer() {
     })
   );
 
+  // Health check
+  app.get("/api/ping", (req, res) => res.json({ pong: true }));
+
   // Auth Middleware
   const requireAuth = (req: any, res: any, next: any) => {
     if (!req.session?.userId) {
@@ -91,15 +94,24 @@ async function startServer() {
     }
   });
 
-  app.post("/api/auth/phone/send", (req, res) => {
-    const { phone } = req.body;
-    if (!phone) return res.status(400).json({ error: "Phone number required" });
-    
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    otpStore.set(phone, { otp, expires: Date.now() + 5 * 60 * 1000 });
-    
-    console.log(`[SMS AUTH] Phone: ${phone}, OTP: ${otp}`);
-    res.json({ success: true, message: "OTP sent (check server logs for demo)" });
+  app.post("/api/auth/phone/send", async (req: any, res) => {
+    try {
+      console.log("POST /api/auth/phone/send", req.body);
+      const { phone } = req.body;
+      if (!phone) {
+        console.warn("Phone number missing in request body");
+        return res.status(400).json({ error: "Phone number required" });
+      }
+      
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      otpStore.set(phone, { otp, expires: Date.now() + 5 * 60 * 1000 });
+      
+      console.log(`[SMS AUTH] Phone: ${phone}, OTP: ${otp}`);
+      res.json({ success: true, otp, message: "OTP sent (check server logs for demo)" });
+    } catch (error) {
+      console.error("Error in phone/send:", error);
+      res.status(500).json({ error: "Internal server error" });
+    }
   });
 
   app.post("/api/auth/phone/verify", (req: any, res) => {
